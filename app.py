@@ -18,6 +18,9 @@ if not creds_json:
     st.error("⚠️ GOOGLE_SERVICE_ACCOUNT_JSON not found in secrets.")
     st.stop()
 
+# Fix for private_key newlines: replace literal "\n" with real line breaks
+creds_json = creds_json.replace('\\n', '\n')
+
 # Parse JSON credentials
 try:
     creds_dict = json.loads(creds_json)
