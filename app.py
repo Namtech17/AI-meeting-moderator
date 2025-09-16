@@ -1,72 +1,96 @@
 import streamlit as st
+import os, json
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
+# -------------------------
+# Streamlit page config
+# -------------------------
 st.set_page_config(page_title="AI Meeting Moderator", layout="wide")
+st.title("🤖 AI Meeting Moderator Dashboard")
 
-# --- Sidebar ---
-st.sidebar.title("AI Meeting Moderator")
-st.sidebar.info("Prototype Dashboard for Meetings & Group Discussions")
+# -------------------------
+# Load Google Service Account from Streamlit Secrets
+# -------------------------
+creds_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 
-# --- Title ---
-st.title("🤖 AI-Based Meeting Moderator")
-st.write("This dashboard simulates how an AI moderator works in online meetings.")
+if not creds_json:
+    st.error("⚠️ GOOGLE_SERVICE_ACCOUNT_JSON not found in secrets.")
+    st.stop()
 
-# --- Transcript Input ---
-st.subheader("📜 Meeting Transcript")
-dummy_transcript = """Alice: I think we should spend more on marketing, maybe 50%.
-Bob: No, logistics are more important, at least 60%.
-Charlie: I agree with Bob, logistics are crucial.
-UnknownUser: I also think logistics should get 80%.
-Alice: Sorry, but who is this? I don’t see UnknownUser on the invite list.
-Bob: Yes, strange. Anyway, I think Alice is not considering risks.
-Alice: You're interrupting me again, Bob. Please let me finish.
-"""
+# Parse JSON credentials
+try:
+    creds_dict = json.loads(creds_json)
+except Exception as e:
+    st.error(f"Could not parse GOOGLE_SERVICE_ACCOUNT_JSON: {e}")
+    st.stop()
 
-transcript = st.text_area("Enter transcript:", dummy_transcript, height=200)
+# Authenticate with Google APIs
+creds = service_account.Credentials.from_service_account_info(
+    creds_dict,
+    scopes=[
+        "https://www.googleapis.com/auth/documents.readonly",
+        "https://www.googleapis.com/auth/drive.readonly"
+    ]
+)
 
-# --- AI Moderator Actions ---
-st.subheader("⚡ AI Moderator Actions")
-st.markdown("""
-- ⚠ **Unauthorized User Detected:** UnknownUser not on invite list.  
-- ⚠ **Interruptions:** Bob interrupted Alice (2 times).  
-- ⚠ **Dominance:** Bob spoke 40% more than others.  
-- ✅ **Noise Handling:** Suggest muting UnknownUser if disruptive.
-""")
+docs_service = build("docs", "v1", credentials=creds)
+drive_service = build("drive", "v3", credentials=creds)
 
-# --- Summary ---
-st.subheader("📝 Meeting Summary")
-st.success("""
-- **Topic:** Budget Allocation for Event  
-- Alice suggested 50% for marketing.  
-- Bob + Charlie supported higher logistics allocation (60%).  
-- Conflict: Alice vs Bob on priorities.  
-- Suspicious: UnknownUser joined without invite, pushing logistics agenda.
-""")
+# -------------------------
+# Fetch the latest Google Doc created by Zapier
+# -------------------------
+def get_latest_doc():
+    results = drive_service.files().list(
+        q="mimeType='application/vnd.google-apps.document'",
+        orderBy="createdTime desc",
+        pageSize=1,
+        fields="files(id, name, createdTime)"
+    ).execute()
+    files = results.get("files", [])
+    return files[0] if files else None
 
-# --- Fairness & Suggestions ---
-st.subheader("🤝 Fairness & Compromise Suggestion")
-st.info("""
-- Allocate 50% logistics, 40% marketing, 10% contingency.  
-- Schedule follow-up with **verified participants only**.  
-- Ensure equal speaking time by setting a timer per person.
-""")
+latest_doc = get_latest_doc()
 
-# --- Stats ---
-st.subheader("📊 Participation Stats")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Alice", "25% talk time")
-col2.metric("Bob", "40% talk time")
-col3.metric("Charlie", "20% talk time")
-col4.metric("UnknownUser", "15% talk time")
+if not latest_doc:
+    st.info("No Google Docs found yet. Run a meeting and let Zapier create one.")
+    st.stop()
 
-# --- Security Alerts ---
-st.subheader("🔒 Security Alerts")
-st.error("1 unauthorized user detected: UnknownUser")
+st.subheader("📄 Latest Meeting Report")
+st.write(f"**Name:** {latest_doc['name']}  \n**Created:** {latest_doc['createdTime']}")
 
-# --- Git Initialization ---
-st.subheader("📂 Git Repository")
-git_init = st.button("Initialize Git Repository")
-if git_init:
-    st.success("Git repository initialized.")
-    # Here you would normally call a function to initialize a git repo, e.g.:
-    # os.system('git init')
+# -------------------------
+# Read content of the doc
+# -------------------------
+doc = docs_service.documents().get(documentId=latest_doc["id"]).execute()
 
+content = ""
+for element in doc.get("body", {}).get("content", []):
+    if "paragraph" in element:
+        for run in element["paragraph"].get("elements", []):
+            text = run.get("textRun", {}).get("content", "")
+            content += text
+
+# -------------------------
+# Try to split into sections
+# (Zapier should format output as [Summary], [Unauthorized Users], etc.)
+# -------------------------
+sections = {}
+current = None
+for line in content.splitlines():
+    line = line.strip()
+    if line.startswith("[") and line.endswith("]"):
+        current = line.strip("[]")
+        sections[current] = []
+    elif current:
+        sections[current].append(line)
+
+# -------------------------
+# Display Report
+# -------------------------
+if sections:
+    for sec, text in sections.items():
+        st.subheader(sec)
+        st.write("\n".join(text))
+else:
+    st.text_area("Raw Document Content", value=content, height=400)
